@@ -45,5 +45,102 @@ public class Main {
         }
     }
 
+    
+    
+     public List<Map<String, String>> ProcessIncomingEmails() {
+        List<Map<String, String>> rez = new ArrayList<>();
+
+        if (!DriverNMFO.isAutorizationConncet()) {
+            logger.warn("НМФО не авторизован");
+            DriverNMFO.authorization(DriverConnect.getDriver());
+            if (!DriverNMFO.isAutorizationConncet()) {
+                logger.warn("Попытка авторизации провалилась, попробуйте позднее");
+                return null;
+            }
+        }
+        // 4. Получаемся письма - заявки
+        //  Message[] messages = EmailReader.ReadMessage("INBOX");//"письма")
+        Message[] messages = EmailReader.ReadMessage("INBOX/Newsletters");//"письма")
+
+        for (Message Message : messages
+        ) {
+            try {
+                logger.info("Начинаем разбирать письма");
+                Map<String, String> CurrentLine = getLineBaseInfo();
+                String Content = null;
+                try {
+                    Content = EmailReader.GetContentMail(Message);
+                } catch (MessagingException | IOException e) {
+                    e.printStackTrace();
+                    logger.warn("Не удалось получить контент из письма");
+                } finally {
+                    EmailReader.SetFlagSeen(Message, false);
+                }
+                if (Content.equals("")) {
+                    System.out.println("Не прочитал письмо");
+                    //  CurrentLine.add("Ошибка,заявка не прочитана");
+                    continue;
+
+                }
+                ParserData ParserData = new ParserData();
+                CurrentLine.put("Number", ParserData.NumberApplicationFromContext(Content));
+                String NumberProgramm = ParserData.NumberProgrammFromContext(Content);
+                //CurrentLine.add(NumberApplication);
+
+                // 5. Получаем данные с НМФО
+                logger.info("------------>" + CurrentLine.get("Number") + "<------------"); //todo выделить начало обрабатываемой заявки,чтобы в логе выделить её начало
+
+                if (CurrentLine.get("Number").contains("NMOV")) {
+                    DriverNMFO.voPageDesktopPreparation(DriverConnect.getDriver());
+                } else {
+                    DriverNMFO.spoPageDesktopPreparation(DriverConnect.getDriver());
+                }
+
+                List<String> clientInfo = new ArrayList<>();
+                List<String> DataClientInfo = DriverConnect.getSpoAndVoPage().searchForApplication(CurrentLine.get("Number"));
+                if (DataClientInfo.size() != 0) {
+                    clientInfo = DriverConnect.getSpoAndVoPage().getClientInfo();
+                }
+                // 6. Записываем строку в google Sheet
+                //todo исправить НОРМАЛЬНО конструкцию на if-else
+                if (clientInfo.size() == 0) {
+                    logger.warn("Не нашел контент по заявке " + CurrentLine.get("Number"));
+                    EmailReader.SetFlagSeen(Message, false);
+                    logger.info("------------> END <------------");
+                    continue;
+                } else {
+                    clientInfo.add(0, DataClientInfo.get(0));
+                    clientInfo.add(1, DataClientInfo.get(1));
+                    clientInfo.add(2, ParserData.getNameProgramm(Content));
+
+                    CurrentLine.put("Payer", clientInfo.get(18 + 3));
+                    CurrentLine.put("Email", clientInfo.get(16 + 3));
+
+                }
+                // 7. Подтверждаем заявку на НМФО
+                //todo
+                DriverConnect.getSpoAndVoPage().setConfirmationCheckBox();
+                DriverConnect.getSpoAndVoPage().closeWindowsAndReturnCyclePc();
+                // 8. Отправляем письмо на почту.
+
+                AddPlayerAndAttach(CurrentLine);
+
+                mailSender.sendMessageWithAttachment(CurrentLine);
+                SheetsService.AppendRow("Заявки", clientInfo);
+                EmailReader.SetFlagSeen(Message, true);
+                rez.add(CurrentLine);
+
+                logger.info("------------> END <------------"); //todo выделить конец обрабатываемой заявки,чтобы в логе выделить что по этой заявке все ок при быстром просмотре лога
+
+            } catch (Exception e) {
+                DriverConnect.getSpoAndVoPage().closeWindowsAndReturnCyclePc();
+                EmailReader.SetFlagSeen(Message, false);
+                logger.warn("Fucking ERROR " + e.getMessage());
+            }
+        }
+        return rez;
+
+    }
+    
 }
 
